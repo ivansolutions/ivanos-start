@@ -3,6 +3,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/ivansolutions/ivanos-start/<тег>/zagruzchik.sh | bash
 #   … | bash -s -- v02        — другой номер поколения (по умолчанию v01)
+#   … | bash -s -- <ссылка>   — одноразовая ссылка заказа (z-…): ключи и дом приезжают с ней
 #
 # Решение владельца 28-09: старт — публичный загрузчик одной строкой. Что он делает и почему так:
 #   · ВЕСЬ код — внутри main(), последняя строка — `main "$@"`. При `curl | bash` bash исполняет
@@ -21,18 +22,57 @@
 #     а не по верхушке main.
 # Данных владельца здесь нет и быть не должно — файл публичный (sukhoe-rozhdenie-proba.sh).
 
+# ── Приём одноразовой ссылки ─────────────────────────────────────────────────
+# Пакет заказа — ассет релиза <id> в публичном ivanos-tools/ivanos-ssylki, зашифрован ключом из
+# строки. Сверка: sha256 пакета — с закреплённым в строке; не сошлось — отказ, ничего не тронуто.
+# Ключи развёртывания кладутся на их места в ssh (установщик не заводит ключ, если файл есть —
+# окна «СТОП до ключей» нет). Гасит ссылку гаситель в Actions по первому скачиванию (~10 мин).
+vzyat_ssylku() {   # <строка> <куда> <каталог ssh>
+  local STROKA=$1 KUDA=$2 SSH_K=$3 ID SHA16 KL R F
+  IFS=. read -r ID SHA16 KL <<< "$STROKA"
+  if ! [[ "$ID" =~ ^z-[0-9]{8}-[0-9]{4}-[0-9a-f]{6}$ && "$SHA16" =~ ^[0-9a-f]{16}$ && "$KL" =~ ^[0-9a-f]{32}$ ]]; then
+    echo "🔴 строка ссылки не той формы — проверь, что скопирована целиком"; return 1
+  fi
+  R=$(mktemp -d); chmod 700 "$R"
+  if [ "$(curl -sSL -o "$R/paket.bin" -w '%{http_code}' --max-time 120 \
+         "https://github.com/${IVANOS_SSYLKI_REPO:-ivanos-tools/ivanos-ssylki}/releases/download/$ID/paket.bin" || true)" != 200 ]; then
+    rm -rf "$R"
+    echo "🔴 ОТКАЗ: ссылка $ID не действует — она одноразовая: уже использована или срок вышел. Нужна новая."
+    return 1
+  fi
+  if [ "$(sha256sum "$R/paket.bin" | cut -c1-16)" != "$SHA16" ]; then
+    rm -rf "$R"; echo "🔴 ОТКАЗ: пакет $ID не тот, что выпущен (sha256 не сошёлся). Ничего не ставлю."; return 1
+  fi
+  printf '%s' "$KL" > "$R/k"
+  if ! openssl enc -d -aes-256-cbc -pbkdf2 -iter 600000 -pass file:"$R/k" -in "$R/paket.bin" -out "$R/p.tgz" 2>/dev/null; then
+    rm -rf "$R"; echo "🔴 ОТКАЗ: пакет $ID не расшифровался"; return 1
+  fi
+  install -d -m 700 "$KUDA" "$SSH_K"
+  tar -C "$KUDA" -xzf "$R/p.tgz"
+  rm -rf "$R"
+  for F in "$KUDA"/klyuchi/*; do
+    [ -f "$F" ] || continue
+    install -m 600 "$F" "$SSH_K/$(basename "$F")"
+  done
+  echo "   ✅ ссылка $ID принята: пакет сверен и расшифрован, ключи — в $SSH_K"
+}
+
 main() {
   set -euo pipefail
   export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
   # ── Закреплено при публикации (тег ivanos-start). Меняется ТОЛЬКО вместе с тегом. ──
-  local ADRES="${IVANOS_START_ADRES:-https://raw.githubusercontent.com/ivansolutions/ivanos-start/v2.0.1}"
-  local SHA_STEND=f82a27812e35682fc617239e0d3a5f19cfd23970c3348b62508e7b1cca2e9697
+  local ADRES="${IVANOS_START_ADRES:-https://raw.githubusercontent.com/ivansolutions/ivanos-start/v2.1.0}"
+  local SHA_STEND=c7d89b29727ef6e5dc370d1ab1792339d2686b0d4a57bab27e1ee00f216960b8
   local SHA_MASHINA=ba1b8d6e4e36b67f2ff9cfa02affc0a27174268ff2718a2213c197a3fc6f100e
-  local PAKET_KOMMIT="${IVANOS_PAKET_KOMMIT:-09de141316c9adf454d604fe837f7141317bddeb}"   # ← полный хеш коммита пакета IvanOS; ставится при публикации
+  local PAKET_KOMMIT="${IVANOS_PAKET_KOMMIT:-99ba2b32d57fb1c8ac662970bb90024a347ffd87}"   # ← полный хеш коммита пакета IvanOS; ставится при публикации
   # ────────────────────────────────────────────────────────────────────────────
 
   # Подмены — только для zagruzchik-proba.sh: папка, tmux и терминал. Владелец их не задаёт.
+  # Одноразовая ссылка (слово владельца 03-10: «ссылка действительна один раз… Без пароля, без
+  # ничего»): z-<дата>-<время>-<6 hex>.<sha256 пакета, 16 hex>.<ключ, 32 hex>. Ключ — в самой строке.
+  local STROKA=""
+  case "${1:-}" in z-*) STROKA=$1; shift ;; esac
   local VERSIYA=${1:-v01} KUDA=${IVANOS_START_PAPKA:-/root/ivanos-start} TMUX_K=${IVANOS_START_TMUX:-tmux} TTY=${IVANOS_START_TTY:-} T F SHA
   [ "$(id -u)" = 0 ] || { echo "🔴 запускать от root: sudo -i, потом та же строка"; exit 1; }
   case "$VERSIYA" in v[0-9][0-9]) : ;; *) echo "🔴 поколение — v00…v99, получено «$VERSIYA»"; exit 1 ;; esac
@@ -49,6 +89,14 @@ main() {
     echo "🔴 терминала нет — установщику некому задать вопросы (ключи, токен, вход в Claude)."
     echo "   Зайти по ssh с терминалом (ssh -t root@сервер) и ту же строку ещё раз."
     exit 1
+  fi
+
+  # Ссылка — ДО всего: не действует (погашена, срок) — отказ словами, машина не тронута.
+  local ZAKAZ="" ZAP_ZAKAZ=""
+  if [ -n "$STROKA" ]; then
+    ZAKAZ=${IVANOS_ZAKAZ_PAPKA:-/root/.ivanos-zakaz}
+    vzyat_ssylku "$STROKA" "$ZAKAZ" "${IVANOS_SSH_KATALOG:-/root/.ssh}" || exit 1
+    ZAP_ZAKAZ="IVANOS_ZAKAZ=$ZAKAZ "
   fi
 
   mkdir -p "$KUDA"
@@ -68,7 +116,7 @@ main() {
   echo "   ✅ установщик скачан и сверен: $KUDA (sha256 ${SHA_STEND:0:12}…)"
 
   local ZAPUSK
-  ZAPUSK="cd ${IVANOS_START_CD:-/root} && IVANOS_PAKET_KOMMIT=$PAKET_KOMMIT IVANOS_SSH_CONNECTION='${SSH_CONNECTION:-}' bash $KUDA/stend-postavit.sh $VERSIYA"
+  ZAPUSK="cd ${IVANOS_START_CD:-/root} && ${ZAP_ZAKAZ}IVANOS_PAKET_KOMMIT=$PAKET_KOMMIT IVANOS_SSH_CONNECTION='${SSH_CONNECTION:-}' bash $KUDA/stend-postavit.sh $VERSIYA"
   if [ -n "${TMUX:-}" ]; then
     eval "$ZAPUSK" <"$TTY"
   elif command -v "$TMUX_K" >/dev/null 2>&1; then

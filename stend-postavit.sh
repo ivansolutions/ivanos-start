@@ -120,6 +120,26 @@ else
   PAKET_PAPKA="${IVANOS_PAKET_PAPKA:-/root/bootstrap}"
 fi
 PAKET_KOMMIT="${IVANOS_PAKET_KOMMIT:-}"
+# ── Режим: владелец или клиент по одноразовой ссылке ─────────────────────────
+# Слово владельца 03-10: «ссылка действительна один раз… Без пароля, без ничего»; клиенту — «да,
+# ничего личного». Загрузчик принял ссылку и разложил пакет заказа в IVANOS_ZAKAZ (zakaz.env,
+# klient-dom/, ключи уже в $SSH_KATALOG). Клиент: без IvanOS, без судей, без ночи и смены, без
+# бэкапа владельца; дом — из шаблона заказа; итог — свой скрипт (itog-proba.sh — в пакете владельца).
+ZAKAZ_PAPKA="${IVANOS_ZAKAZ:-}"
+REZHIM=vladelets
+KTO=Ивана
+ITOG_SKRIPT="$PAKET_PAPKA/itog-proba.sh"
+if [ -n "$ZAKAZ_PAPKA" ] && [ -f "$ZAKAZ_PAPKA/zakaz.env" ]; then
+  . "$ZAKAZ_PAPKA/zakaz.env"
+  if [ "${ZAKAZ_VID:-}" = klient ]; then
+    REZHIM=klient
+    KTO=ассистента
+    GITHUB_DOMA=""
+    SESSIYA=assistent-$VERSIYA
+    IMYA="Ассистент $(date +%d-%m)"
+    ITOG_SKRIPT=/usr/local/sbin/ivanos-itog-klient.sh
+  fi
+fi
 # Один Chromium на машину: для глаз Ивана (MCP Playwright) и для poisk-raboty. Версия — та же,
 # что закреплена в poisk-raboty (package.json), иначе инструмент докачает свою ревизию рядом.
 BRAUZERY=/opt/ivanos/browsers
@@ -1746,7 +1766,7 @@ fakt "Playwright" "$(python3 -c 'import json;print(json.load(open("/root/.claude
 # Кавычек на границе heredoc НЕТ намеренно: подставляются путь, сессия, сокет и имя.
 cat > "$SLUZHBA" <<YUNIT
 [Unit]
-Description=IvanOS $VERSIYA: постоянная сессия Ивана
+Description=IvanOS $VERSIYA: постоянная сессия $KTO
 After=network-online.target
 Wants=network-online.target
 
@@ -1785,6 +1805,8 @@ RestartSec=30s
 WantedBy=multi-user.target
 YUNIT
 
+# Клиенту — только постоянная сессия: ночь, смена и сторож судей — машинерия дома владельца.
+if [ "$REZHIM" != klient ]; then
 # Юнит ночного прогона. 05-09 обнаружено: он жил ТОЛЬКО на машине и в установщик не
 # входил — снос убил бы то, чем Иван работает каждую ночь, и молча. Ровно та же дыра,
 # что была с плагинами и с машинерией дома; закрывается так же — объявлением здесь.
@@ -1896,8 +1918,11 @@ AccuracySec=5min
 [Install]
 WantedBy=timers.target
 SMENATAJMER
+fi
 
 systemd-analyze verify "$SLUZHBA" || upal "юнит не проходит проверку systemd"
+[ -x "$DOM/sessiya-podnyat.sh" ] || upal "sessiya-podnyat.sh не исполняем — сессия не поднимется"
+if [ "$REZHIM" != klient ]; then
 systemd-analyze verify "$STOROZH_SLUZHBA" || upal "юнит сторожа не проходит проверку systemd"
 # Таймер — единственный, что включается с --now, и до 05-09 он единственный не проверялся.
 systemd-analyze verify "$STOROZH_TAJMER" || upal "таймер сторожа не проходит проверку systemd"
@@ -1909,11 +1934,14 @@ systemd-analyze verify "$SMENA_TAJMER"  || upal "таймер смены не п
 [ -x "$DOM/smena-sutok.sh" ] || upal "smena-sutok.sh не исполняем — юнит смены был бы мёртвым"
 [ -x "$DOM/sessiya-podnyat.sh" ] || upal "sessiya-podnyat.sh не исполняем — сессия Ивана не поднимется"
 [ -x "$DOM/noch-progon.sh" ] || upal "ночной юнит указывает на $DOM/noch-progon.sh, а он не исполним"
+fi
 systemctl daemon-reload
 systemctl enable -q "ivanos-$VERSIYA.service"
+if [ "$REZHIM" != klient ]; then
 systemctl enable -q --now "ivanos-storozh-$VERSIYA.timer" || upal "таймер сторожа не включился"
 systemctl enable -q --now "ivanos-smena-$VERSIYA.timer"   || upal "таймер смены не включился"
 systemctl enable -q --now "ivanos-noch-$VERSIYA.timer"    || upal "таймер ночи не включился"
+fi
 systemctl restart "ivanos-$VERSIYA.service" || upal "служба ivanos-$VERSIYA не поднялась. Смотри: systemctl status ivanos-$VERSIYA --no-pager -l"
 sleep 20
 
@@ -2116,7 +2144,7 @@ f_itog_do() {
 }
 f_perezagruzka() {
   if [ "${IVANOS_BEZ_PEREZAGRUZKI:-0}" = 1 ]; then
-    fakt "перезагрузка" "не делаю (IVANOS_BEZ_PEREZAGRUZKI=1). Итог после неё: bash $PAKET_PAPKA/itog-proba.sh posle"; return 0
+    fakt "перезагрузка" "не делаю (IVANOS_BEZ_PEREZAGRUZKI=1). Итог после неё: bash $ITOG_SKRIPT posle"; return 0
   fi
   cat > /etc/systemd/system/ivanos-itog-posle.service <<ITOG
 [Unit]
@@ -2128,7 +2156,7 @@ Wants=network-online.target
 Type=oneshot
 Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStartPre=/bin/sleep 60
-ExecStart=/bin/bash $PAKET_PAPKA/itog-proba.sh posle
+ExecStart=/bin/bash $ITOG_SKRIPT posle
 ExecStartPost=/bin/systemctl disable ivanos-itog-posle.service
 TimeoutStartSec=15min
 
@@ -2144,6 +2172,64 @@ ITOG
   echo "   (ssh-сессия оборвётся — это она.)"
   sleep 30
   systemctl reboot
+}
+
+# ── Клиент по одноразовой ссылке ─────────────────────────────────────────────
+# Три действия человека, как у владельца: строка, «n8n да/нет», вход в Claude. Ключ к инструменту
+# уже лежит в $SSH_KATALOG (положил загрузчик) — f_github_dostup его НЕ заводит заново
+# (klyuch_zavesti: файл есть — только псевдоним), и окна «СТОП до ключей» нет.
+f_okno_klient() {
+  IVANOS_DOP_KLYUCHI="poisk-raboty|$INSTRUMENT_POISK|net"
+  f_github_dostup
+  echo
+  okno_n8n
+  fon_zhdat claude
+  okno_vhod
+}
+f_dom_klient() {
+  [ -d "$ZAKAZ_PAPKA/klient-dom" ] || upal "в пакете заказа нет klient-dom — ставить нечего"
+  if [ ! -d "$DOM/.git" ]; then
+    install -d -m 0755 "$DOM"
+    cp -a "$ZAKAZ_PAPKA/klient-dom/." "$DOM/"
+    git -C "$DOM" init -q -b main
+    git -C "$DOM" config user.name "Ассистент"
+    git -C "$DOM" config user.email "assistent@$(hostname -s)"
+    git -C "$DOM" add -A
+    git -C "$DOM" commit -q -m "дом поставлен по ссылке $ZAKAZ_ID"
+  fi
+  local PK="/root/.claude/projects/$(printf '%s' "$DOM" | tr / -)/memory"
+  mkdir -p "$(dirname "$PK")" "$DOM/pamyat"
+  [ -L "$PK" ] || [ -e "$PK" ] || ln -s "$DOM/pamyat" "$PK"
+  fakt "дом" "$DOM из шаблона заказа $ZAKAZ_ID, $(git -C "$DOM" ls-files | wc -l) файлов"
+  fakt "память" "$PK -> $DOM/pamyat"
+}
+# Итог клиента — свой скрипт: itog-proba.sh едет в пакете владельца, клиенту его не видно.
+# Проверяет то, что происходит: служба, экран сессии, таймер поиска, защита, n8n по ответу и —
+# 🔴 что ключ установки НЕ открывает дом владельца и судей (слово 03-10: «к дому и судьям доступа нет»).
+f_itog_klient_postavit() {
+  cat > "$ITOG_SKRIPT" <<ITOGK
+#!/bin/bash
+# ivanos-itog-klient.sh do|posle — итог установки клиента; пишет $SOSTOYANIE/ITOG.md.
+set -uo pipefail
+KOGDA=\${1:-do}; PLOHO=0; OUT=$SOSTOYANIE/ITOG.md
+str() { printf '%s %s\n' "\$1" "\$2" | tee -a "\$OUT"; }
+proverka() { if eval "\$2" >/dev/null 2>&1; then str "✅" "\$1"; else str "🔴" "\$1"; PLOHO=1; fi; }
+printf '# Итог установки (%s), %s\n\n' "\$KOGDA" "\$(date -u +%FT%TZ)" >> "\$OUT"
+proverka "служба ivanos-$VERSIYA активна" "systemctl is-active -q ivanos-$VERSIYA"
+proverka "сессия: remote-control активен" "tmux -S $SOKET/tmux-0/default capture-pane -p -t $SESSIYA | grep -q 'remote-control is active'"
+proverka "poisk-raboty: таймер включён" "systemctl is-enabled -q poisk-raboty.timer"
+proverka "защита: ufw активен" "ufw status | grep -q 'Status: active'"
+proverka "защита: fail2ban активен" "systemctl is-active -q fail2ban"
+if [ "\$(cat $SOSTOYANIE/n8n.otvet 2>/dev/null)" = da ]; then proverka "n8n активен" "systemctl is-active -q n8n"; fi
+for R in $REPO_GITHUB $SUDI_REPO; do
+  proverka "ключ установки НЕ открывает \$R" "! GIT_SSH_COMMAND='ssh -i $SSH_KATALOG/poisk-raboty -o IdentitiesOnly=yes -o BatchMode=yes' git ls-remote git@github.com:\$R.git HEAD"
+done
+echo >> "\$OUT"
+[ \$PLOHO = 0 ] && str "✅" "итог \$KOGDA: всё зелёное" || str "🔴" "итог \$KOGDA: есть красное — выше"
+exit \$PLOHO
+ITOGK
+  chmod 0755 "$ITOG_SKRIPT"
+  bash "$ITOG_SKRIPT" do || upal "итог ДО перезагрузки не весь зелёный — выше что. Не перезагружаю"
 }
 
 main() {
@@ -2167,6 +2253,22 @@ main() {
   etap mashina    f_mashina
   fon mashina pakety:f_pakety sajt:f_sajt node:f_node brauzer:f_brauzer
   fon claude claude:f_claude
+  if [ "$REZHIM" = klient ]; then
+    etap okno       f_okno_klient
+    fon n8n n8n:f_n8n
+    fon_zhdat mashina
+    etap "dom-$VERSIYA" f_dom_klient
+    etap vhod       f_vhod
+    etap "sluzhba-$VERSIYA" f_sluzhba
+    etap poisk-raboty f_poisk
+    fon_zhdat n8n
+    etap itog-do    f_itog_klient_postavit
+    echo
+    echo "== до перезагрузки всё зелёное =="
+    fakt "за сколько" "$(( ($(date +%s) - $(cat "$SOSTOYANIE/nachalo")) / 60 )) мин от первого запуска"
+    etap perezagruzka f_perezagruzka
+    return 0
+  fi
   etap okno       f_okno
   etap paket      f_paket
   paket_nastrojki
