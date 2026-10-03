@@ -219,21 +219,46 @@ etap() {
 
 # fon <имя> <шаг:функция>… — цепочка шагов фоном, журнал $SOSTOYANIE/fon-<имя>.log.
 # Код цепочки — в fon-<имя>.kod: `wait` на конвейере вернул бы код фильтра времени, а не шагов.
-declare -A FON_PID=()
+#
+# 🔴 30-09, находка 5 пробы на чистой Hetzner 29-09: первый запуск умер (находка 2), а его цепочка
+# n8n жила; повтор через 3 мин запустил ВТОРУЮ `npm install` в ту же /opt/n8n/app (fon-n8n.log:
+# «== n8n ==» в 20:32:21 и 20:35:38), обе упали в 20:37 на пропавших из-под них папках
+# node_modules, встала только третья, пущенная одна. `etap` пропускает сделанное (.ok), а не
+# идущее, а `rm -f …kod` стирал код живой цепочки. Теперь цепочку держит замок flock
+# fon-<имя>.zamok: берёт его запускающий, держат процессы цепочки (дескриптор наследуется, у
+# запускающего закрывается сразу). Занят — вторую не запускаем и кода не трогаем: fon_zhdat
+# ждёт, пока замок отпустят, и читает тот же fon-<имя>.kod. Умерла цепочка (хоть kill -9) — ядро
+# снимает flock само, повтор запускает её заново: замок не залипает, как залип бы файл-PID.
+# Цена: процесс, пущенный шагом и переживший цепочку, держал бы замок; фоновых процессов шаги
+# цепочек не пускают (службы — через systemctl, они не наследуют), проверено grep'ом 30-09.
+declare -A FON_PID=() FON_CHUZHAYA=()
 fon() {
-  local IMYA=$1; shift
+  local IMYA=$1 FD; shift
   mkdir -p "$SOSTOYANIE"
+  exec {FD}>>"$SOSTOYANIE/fon-$IMYA.zamok"
+  if ! flock -n "$FD"; then
+    exec {FD}>&-
+    FON_PID[$IMYA]=""; FON_CHUZHAYA[$IMYA]=1
+    fakt "фон $IMYA" "идёт с прошлого запуска, жду — второй не запускаю · журнал $SOSTOYANIE/fon-$IMYA.log"
+    return 0
+  fi
+  FON_CHUZHAYA[$IMYA]=""
   rm -f "$SOSTOYANIE/fon-$IMYA.kod"
   (
     ( for P in "$@"; do etap "${P%%:*}" "${P#*:}"; done ) </dev/null \
       && echo 0 > "$SOSTOYANIE/fon-$IMYA.kod" || echo $? > "$SOSTOYANIE/fon-$IMYA.kod"
   ) 2>&1 | vremya_na_stroku >> "$SOSTOYANIE/fon-$IMYA.log" &
   FON_PID[$IMYA]=$!
+  exec {FD}>&-
   fakt "фоном: $IMYA" "$(printf '%s ' "${@%%:*}")· журнал $SOSTOYANIE/fon-$IMYA.log"
 }
 fon_zhdat() {   # <имя> — дождаться цепочки; упала — показать хвост журнала и упасть
   local IMYA=$1 KOD
-  if [ -n "${FON_PID[$IMYA]:-}" ]; then wait "${FON_PID[$IMYA]}" 2>/dev/null || true; fi
+  if [ -n "${FON_CHUZHAYA[$IMYA]:-}" ]; then
+    # Цепочка прошлого запуска: не наш ребёнок, `wait` её не ждёт. Ждём, пока отпустит замок —
+    # код она пишет раньше, чем выходит.
+    flock "$SOSTOYANIE/fon-$IMYA.zamok" true || true
+  elif [ -n "${FON_PID[$IMYA]:-}" ]; then wait "${FON_PID[$IMYA]}" 2>/dev/null || true; fi
   KOD=$(cat "$SOSTOYANIE/fon-$IMYA.kod" 2>/dev/null || echo "нет")
   if [ "$KOD" = 0 ]; then fakt "фон $IMYA" "готов"; return 0; fi
   echo; tail -25 "$SOSTOYANIE/fon-$IMYA.log" 2>/dev/null | sed 's/^/   │ /'
@@ -292,7 +317,7 @@ vorota_svezhesti() {
   # с домом на 8971 байт и копил этот разрыв с 07-09 невидимо.
   # Оба списка читаются ИЗ ЭТОГО ЖЕ скрипта — второй копии правила не заводим (класс К2).
   local SODERZH SLOVO OSTATOK=""
-  SODERZH=$(grep -m1 '^ZHIVYE_SODERZHANIE=' "$SKRIPT" | cut -d'"' -f2)
+  SODERZH=$(grep -m1 '^ZHIVYE_SODERZHANIE=' "$SKRIPT" | cut -d'"' -f2)   # pipefail-ок: строка стоит в этом же файле; нет её — файл битый, выход верен
   if [ -n "$SODERZH" ]; then
     for SLOVO in $ZH; do
       case " $SODERZH " in *" $SLOVO "*) continue ;; esac
@@ -435,7 +460,7 @@ predproverka() {
   MEM=$(awk '/^MemTotal:/{print int($2/1024)}' "$K/proc/meminfo" 2>/dev/null)
   [ "${MEM:-0}" -ge 1900 ] || BEDY="$BEDY
    · памяти ${MEM:-?} МБ, нужно не меньше 2 ГБ (Chromium, Node, Claude Code)"
-  SVOB=$(df -Pm "${K:-/}" 2>/dev/null | awk 'NR==2{print $4}')
+  SVOB=$(df -Pm "${K:-/}" 2>/dev/null | awk 'NR==2{print $4}')   # pipefail-ок: df корня не падает; упал — машина не та, выход верен
   [ "${SVOB:-0}" -ge 15000 ] || BEDY="$BEDY
    · свободно на диске ${SVOB:-?} МБ, нужно не меньше 15 ГБ"
   KOD=$(curl -4 -sS -o /dev/null -w '%{http_code}' --max-time 15 https://github.com 2>/dev/null || true)
@@ -910,7 +935,11 @@ token_kod() {     # <токен> — код ответа GitHub на орган�
 }
 okno_token() {
   local T KOD
-  T=$(sed -n 's/^GH_TOKEN=//p' "$TOKEN_FAJL" 2>/dev/null | tail -1)
+  # 🔴 Находка 2 пробы 29-09: было `T=$(sed … "$TOKEN_FAJL" 2>/dev/null | tail -1)`. На новой машине
+  # файла нет, sed отдаёт 2, pipefail несёт 2 в присваивание, set -e выходит — окно вводов молча
+  # закрывалось сразу после ключей (stderr погашен). Нет файла — нет токена, это не ошибка.
+  T=""
+  [ ! -f "$TOKEN_FAJL" ] || T=$(sed -n 's/^GH_TOKEN=//p' "$TOKEN_FAJL" | tail -1)
   if [ -n "$T" ] && [ "$(token_kod "$T")" = 200 ]; then fakt "токен ${INSTRUMENT_POISK%%/*}" "уже есть в $TOKEN_FAJL, GitHub отвечает 200"; return 0; fi
   echo "   Токен GitHub для ${INSTRUMENT_POISK%%/*} (Иван заводит и ведёт там репозитории инструментов)."
   echo "   Вводится скрыто. Пусто — пропустить, потом: bash $SKRIPT $VERSIYA после rm $SOSTOYANIE/okno.ok"
@@ -965,10 +994,13 @@ okno_vhod() {
   local T0
   if vhod_est; then fakt "вход в Claude" "уже есть"; return 0; fi
   echo "   Вход в Claude: ниже появится ссылка — открыть в браузере, войти, код вставить сюда."
-  timeout "${IVANOS_VHOD_S:-600}" "$CLAUDE" auth login < "$TTY_VVOD" > "$TTY_VYVOD" 2>&1 || true
+  # 🔴 --foreground — находка 3 пробы 29-09: без него timeout уводит claude в свою группу процессов,
+  # она не в переднем плане терминала, чтение кода — SIGTTIN, процесс в состоянии T, ссылки нет.
+  # Замер 30-09 в чистом корне: `timeout 4 читатель </dev/tty` → T и код 124; с --foreground — прочитал.
+  timeout --foreground "${IVANOS_VHOD_S:-600}" "$CLAUDE" auth login < "$TTY_VVOD" > "$TTY_VYVOD" 2>&1 || true
   if vhod_est; then fakt "вход в Claude" "есть"; return 0; fi
-  # 🔴 Вход через /dev/tty внутри tmux не проверен ни разу (замечание проверяющего 28-09) —
-  # поэтому запасной путь: сказать словами и ждать, не выходить.
+  # Запасной путь остаётся (замечание проверяющего 28-09): вход в окне не прошёл по иной причине —
+  # сказать словами и ждать, не выходить. Вход в tmux и без него проверен в chisty-proba.sh, раздел 3.
   echo
   echo "   🔴 Вход отсюда не прошёл. Сделай его в ДРУГОМ окне своего компьютера:"
   echo "       ssh -t root@$(hostname -I 2>/dev/null | awk '{print $1}') \"$CLAUDE auth login\""
@@ -1173,6 +1205,7 @@ if [ ! -d .git ] && [ -n "$GITHUB_DOMA" ] && [ "${IVANOS_CHISTO:-0}" != "1" ]; t
   # Тянем ВСЕ ветки этого поколения и берём самую свежую по дате коммита, а не по имени:
   # имена сортируются как строки, и 3112 оказалось бы старше 0101 следующего года.
   if git fetch -q origin "refs/heads/$VERSIYA-*:refs/remotes/origin/$VERSIYA-*" 2>/dev/null; then
+    # pipefail-ок: for-each-ref по шаблону без совпадений отдаёт 0 и пусто — падает только битый репозиторий
     PROSHLAYA=$(git for-each-ref --sort=-committerdate --format='%(refname:short)'                 "refs/remotes/origin/$VERSIYA-*" 2>/dev/null | head -1)
     if [ -n "${PROSHLAYA:-}" ]; then
       # reset --hard кладёт рабочее дерево прошлой жизни. Файлы, которых нет в той ветке,
@@ -1223,9 +1256,9 @@ elif [ -d "$PAMYAT_KLIENTA" ]; then
   # КОПИИ. Ровно тот случай, ради которого копию и делают.
   # Ту же дыру чинили в тот же день в noch-progon.sh; здесь она осталась бы жить
   # и досталась бы КАЖДОМУ следующему поколению — установщик рождает их все.
-  BYLO_PAM=$(find "$PAMYAT_KLIENTA" -type f -name '*.md' 2>/dev/null | wc -l)
+  BYLO_PAM=$(find "$PAMYAT_KLIENTA" -type f -name '*.md' 2>/dev/null | wc -l)   # pipefail-ок: папка есть — проверено `-d` выше
   if cp -a "$PAMYAT_KLIENTA/." "$PAMYAT_DOMA/" 2>/dev/null; then
-    STALO_PAM=$(find "$PAMYAT_DOMA" -type f -name '*.md' 2>/dev/null | wc -l)
+    STALO_PAM=$(find "$PAMYAT_DOMA" -type f -name '*.md' 2>/dev/null | wc -l)   # pipefail-ок: папку только что заполнил cp
     if [ "$STALO_PAM" -ge "$BYLO_PAM" ]; then
       rm -rf "$PAMYAT_KLIENTA"
       ln -s "$PAMYAT_DOMA" "$PAMYAT_KLIENTA"
@@ -1628,7 +1661,9 @@ if [ -n "$GITHUB_DOMA" ]; then
     # 🔴 Проба 05-09 поймала: без этой развилки повторный запуск на СВОЁМ доме кричал
     # «ветка занята» и оставлял дом без копии. Идемпотентность установщика — правило.
     git fetch -q origin "$VETKA" 2>/dev/null || true
-    UDALYONNAYA=$(git ls-remote --heads origin "$VETKA" 2>/dev/null | cut -f1)
+    # pipefail: обрыв сети между двумя ls-remote выходил молча (класс находки 2, 30-09) — пусто значит
+    # «не узнал», и дальше пуш сам скажет «КОПИИ НЕТ».
+    UDALYONNAYA=$( { git ls-remote --heads origin "$VETKA" 2>/dev/null || true; } | cut -f1)
     if [ -n "$UDALYONNAYA" ] && ! git merge-base --is-ancestor "$UDALYONNAYA" HEAD 2>/dev/null; then
       echo
       echo "   🔴 ВЕТКА $VETKA НА GitHub ЗАНЯТА ЧУЖОЙ РАБОТОЙ."
@@ -2026,6 +2061,11 @@ f_n8n() {
       || { tail -20 "$T/zhurnal"; rm -rf "$T"; upal "n8n@$N8N_VERSIYA не встал — журнал выше"; }
     rm -rf "$T"
   fi
+  # 🔴 PATH юнита начинается со СВОЕГО Node — 30-09, находка 6. n8n запускает JS-раннер задач как
+  # `spawn('node', …)` — по PATH (node_modules/n8n/dist/task-runners/task-runner-process-js.js:71),
+  # а не своим process.execPath. Без этой строки раннер бежит на системном Node 22 вопреки
+  # «системный Node не трогается» выше, а на машине без системного node (чистый корень 30-09)
+  # раннер падает по кругу, и n8n через ~20 с выходит с КОДОМ 0 — Restart=on-failure его не поднимает.
   cat > /etc/systemd/system/n8n.service <<N8N
 [Unit]
 Description=n8n $N8N_VERSIYA (IvanOS): автоматизации, только 127.0.0.1
@@ -2037,6 +2077,7 @@ User=n8n
 Group=n8n
 WorkingDirectory=/var/lib/n8n
 Environment=HOME=/var/lib/n8n
+Environment=PATH=$K/node/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
 Environment=N8N_LISTEN_ADDRESS=127.0.0.1
 Environment=N8N_HOST=127.0.0.1
 Environment=N8N_PORT=$N8N_PORT
