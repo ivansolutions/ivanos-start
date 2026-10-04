@@ -86,14 +86,15 @@ SESSIYA=ivan-$VERSIYA
 # 🔴 27-09, дыра «е» проверки перед Contabo: адрес был прибит в пяти местах (:69, :431,
 # :850-858, :889), и переезд на новый репозиторий IvanOS правил бы каждое — одно забытое
 # отправило бы копию дома не туда молча. Теперь адрес — одна строка ниже, а псевдоним ssh
-# и имя ключа выводятся из неё: ivansolutions/IvanOS → git@github-ivanos:…, ключ /root/.ssh/ivanos.
+# и имя ключа выводятся из неё: ivanos-tools/IvanOS → git@github-ivanos:…, ключ /root/.ssh/ivanos.
 # 27-09, слово владельца: IvanOS начинается с одного пакета, без истории и веток ivan-dom
 # (ivan-dom уходит в архив). Ветка main — сам пакет (установщик); ветки поколений vNN-*
 # появляются рядом, по замку и «да» владельца. 🔴 GitHub не пускает ОДИН ключ развёртывания
 # в два репозитория — у IvanOS свой ключ, установщик заводит его сам и останавливается.
 # Поставить против старого репозитория (стенд): IVANOS_REPO=ivansolutions/ivan-dom.
 # Проба: dyry-proba.sh Е.
-REPO_GITHUB="${IVANOS_REPO:-ivansolutions/IvanOS}"
+# 04-10, шаг 1 переезда (слово «1 да»): дом переехал в ivanos-tools; старый адрес отвечает редиректом git.
+REPO_GITHUB="${IVANOS_REPO:-ivanos-tools/IvanOS}"
 REPO_IMYA=$(basename "$REPO_GITHUB" | tr '[:upper:]' '[:lower:]')
 SSH_KATALOG="${IVANOS_SSH_KATALOG:-/root/.ssh}"
 SSH_PSEVDONIM="github-$REPO_IMYA"
@@ -143,6 +144,12 @@ if [ -n "$ZAKAZ_PAPKA" ] && [ -f "$ZAKAZ_PAPKA/zakaz.env" ]; then
   # ключа записи, БЕЗ токена, БЕЗ пароля бэкапа; машина пробы в GitHub не пишет». Дом владельца целиком
   # (ночь, смена, судьи), но: пакет и дом — из заказа (opis.json сверяется до первого изменения машины,
   # sverit_opis), GITHUB_DOMA пуст (ни ключа IvanOS, ни origin), в окне нет токена и пароля, бэкапа нет.
+  # Ссылка на дом владельца С ЗАПИСЬЮ (04-10, «1 да, 2 А»): путь владельца как есть — пакет и дом с GitHub
+  # ключом записи, который приехал в ссылке; опись закрепляет источник и коммит пакета; без окна ключей,
+  # токена и пароля, без бэкапа (пароля нет — как и на Contabo сейчас).
+  if [ "${ZAKAZ_VID:-}" = vladelets ]; then
+    SSYLKA_VLADELTSA=1
+  fi
   if [ "${ZAKAZ_VID:-}" = proba ]; then
     REZHIM=proba
     GITHUB_DOMA=""
@@ -497,47 +504,68 @@ vorota_svezhesti
 # выпусков), судьи = закреплённым здесь, dom_repo пуст. Только python3 — git на чистой машине ещё нет.
 sverit_opis() {
   local Z=$ZAKAZ_PAPKA
-  [ -f "$Z/opis.json" ] || { echo "🔴 ОТКАЗ: в пакете пробы нет opis.json"; exit 1; }
-  python3 - "$Z" "$VERSIYA" "${ZAKAZ_ID:-}" "$SKRIPT" "$SUDI_REPO" "$SUDI_KOMMIT" <<'SVERKA' || exit 1
-import json, sys, hashlib, os
-z, versiya, zakaz, skript, sudi_repo, sudi_k = sys.argv[1:]
+  [ -f "$Z/opis.json" ] || { echo "🔴 ОТКАЗ: в пакете ссылки нет opis.json"; exit 1; }
+  python3 - "$Z" "$VERSIYA" "${ZAKAZ_ID:-}" "$SKRIPT" "$SUDI_REPO" "$SUDI_KOMMIT" "${ZAKAZ_VID:-}" "$REPO_GITHUB" <<'SVERKA' || exit 1
+import json, sys, hashlib, os, re
+z, versiya, zakaz, skript, sudi_repo, sudi_k, vid_ssylki, repo_doma = sys.argv[1:]
 h = lambda f: hashlib.sha256(open(f, "rb").read()).hexdigest()
-def otkaz(t): print("🔴 ОТКАЗ (опись пробы): " + t + ". Машина не тронута."); sys.exit(1)
+def otkaz(t): print("🔴 ОТКАЗ (опись): " + t + ". Машина не тронута."); sys.exit(1)
 try: o = json.load(open(os.path.join(z, "opis.json")))
 except Exception as e: otkaz(f"opis.json не читается ({e})")
 if o.get("format") != 1: otkaz(f"format {o.get('format')!r}, этот установщик знает только 1")
-if o.get("vid") != "proba": otkaz(f"вид {o.get('vid')!r}, ждал proba")
+vid = o.get("vid")
+if vid not in ("proba", "vladelets"): otkaz(f"вид {vid!r}, знаю proba и vladelets")
+if vid != vid_ssylki: otkaz(f"опись вида {vid!r}, а ссылка вида {vid_ssylki!r}")
 if o.get("zakaz_id") != zakaz: otkaz(f"опись заказа {o.get('zakaz_id')!r}, а ссылка {zakaz!r}")
 if o.get("pokolenie") != versiya: otkaz(f"опись для поколения {o.get('pokolenie')!r}, ставлю {versiya!r}")
-if o.get("dom_repo") is not None: otkaz("у пробы есть репозиторий дома — проба в GitHub не пишет")
-for f, k in (("dom.bundle", o.get("dom_bundle_sha256")), ("paket.tgz", (o.get("paket") or {}).get("sha256"))):
-    p = os.path.join(z, f)
-    if not os.path.isfile(p): otkaz(f"нет {f}")
-    if h(p) != k: otkaz(f"{f} не тот, что в описи (sha256)")
 ist = o.get("istochnik") or {}
-with open(os.path.join(z, "dom.bundle"), "rb") as b:
-    golova = [l.decode() for l in iter(b.readline, b"\n")]
-if f"{ist.get('sha')} refs/heads/{ist.get('vetka')}\n" not in golova:
-    otkaz(f"вершина снимка не {ist.get('vetka')} @ {str(ist.get('sha'))[:7]}")
+if not re.fullmatch(r"[0-9a-f]{40}", str(ist.get("sha"))): otkaz("вершина источника — не полный хеш")
+if vid == "proba":
+    if o.get("dom_repo") is not None: otkaz("у пробы есть репозиторий дома — проба в GitHub не пишет")
+    for f, k in (("dom.bundle", o.get("dom_bundle_sha256")), ("paket.tgz", (o.get("paket") or {}).get("sha256"))):
+        p = os.path.join(z, f)
+        if not os.path.isfile(p): otkaz(f"нет {f}")
+        if h(p) != k: otkaz(f"{f} не тот, что в описи (sha256)")
+    with open(os.path.join(z, "dom.bundle"), "rb") as b:
+        golova = [l.decode() for l in iter(b.readline, b"\n")]
+    if f"{ist.get('sha')} refs/heads/{ist.get('vetka')}\n" not in golova:
+        otkaz(f"вершина снимка не {ist.get('vetka')} @ {str(ist.get('sha'))[:7]}")
+    if not str(o.get("naznachenie", "")).startswith("proba-"): otkaz("ветка назначения не proba-…")
+else:
+    if o.get("dom_repo") != repo_doma: otkaz(f"дом в описи {o.get('dom_repo')!r}, установщик ставит {repo_doma!r}")
+    if not re.fullmatch(r"[0-9a-f]{40}", str((o.get("paket") or {}).get("kommit"))): otkaz("коммит пакета — не полный хеш")
+    if not str(o.get("naznachenie", "")).startswith(versiya + "-"): otkaz(f"ветка назначения не {versiya}-…")
+    for f in os.listdir(os.path.join(z, "klyuchi")):
+        if f not in ("sudi", "poisk-raboty", os.path.basename(repo_doma).lower()): otkaz(f"лишний ключ в пакете: {f}")
 if (o.get("paket") or {}).get("stend_sha256") != h(skript):
     otkaz("установщик пакета и этот установщик разных выпусков (stend_sha256)")
 s = o.get("sudi") or {}
 if s.get("repo") != sudi_repo or s.get("kommit") != sudi_k:
     otkaz(f"судьи в описи {s.get('repo')}@{str(s.get('kommit'))[:7]}, закреплены {sudi_repo}@{sudi_k[:7]}")
-if not str(o.get("naznachenie", "")).startswith("proba-"): otkaz("ветка назначения не proba-…")
-print(f"   ✅ опись пробы сошлась: {ist.get('vetka')} @ {ist.get('sha','')[:7]}, судьи @ {sudi_k[:7]}")
+print(f"   ✅ опись ({vid}) сошлась: {ist.get('vetka')} @ {ist.get('sha','')[:7]} → {o.get('naznachenie')}, судьи @ {sudi_k[:7]}")
 SVERKA
+  if [ -n "${SSYLKA_VLADELTSA:-}" ]; then
+    # Пакет — по коммиту из описи, не по закреплённому в загрузчике: опись выбрана при выпуске, а сверка
+    # stend_sha256 выше держит их одним выпуском установщика.
+    PAKET_KOMMIT=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["paket"]["kommit"])' "$Z/opis.json")
+    return 0
+  fi
   if [ ! -d "$PAKET_PAPKA/dom" ]; then
     install -d -m 700 "$PAKET_PAPKA"
     tar -C "$PAKET_PAPKA" -xzf "$Z/paket.tgz" || { echo "🔴 ОТКАЗ: paket.tgz не распаковался"; exit 1; }
   fi
 }
-f_okno_proba() {
+f_okno_proba() {   # окно ссылки (proba и vladelets): ключи приехали в пакете — только n8n и вход
   IVANOS_TOLKO_POKAZAT=1
+  [ -d "$PAKET_PAPKA/dom" ] || IVANOS_NUZHEN_PAKET=1
   IVANOS_DOP_KLYUCHI="poisk-raboty|$INSTRUMENT_POISK|net sudi|$SUDI_REPO|net"
   f_github_dostup
   echo
-  fakt "токен и пароль бэкапа" "не спрашиваются: проба в GitHub не пишет, бэкапа нет (04-10)"
+  if [ "$REZHIM" = proba ]; then
+    fakt "токен и пароль бэкапа" "не спрашиваются: проба в GitHub не пишет, бэкапа нет (04-10)"
+  else
+    fakt "токен и пароль бэкапа" "не спрашиваются: ключ записи дома приехал в ссылке, бэкапа нет (04-10)"
+  fi
   okno_n8n
   echo
   echo "   Жду ключи на GitHub…"
@@ -551,8 +579,19 @@ f_okno_proba() {
 proba_ne_pishet() {
   local PLOHO=0 K
   pr() { if eval "$2" >/dev/null 2>&1; then fakt "✅ $1" ""; else fakt "🔴 $1" ""; PLOHO=1; fi; }
-  pr "проба: токена нет"            "! grep -q '^GH_TOKEN=' '$TOKEN_FAJL'"
-  pr "проба: пароля бэкапа нет"     "[ ! -e '$PAROL_FAJL' ]"
+  pr "ссылка: токена нет"            "! grep -q '^GH_TOKEN=' '$TOKEN_FAJL'"
+  pr "ссылка: пароля бэкапа нет"     "[ ! -e '$PAROL_FAJL' ]"
+  if [ -n "${SSYLKA_VLADELTSA:-}" ]; then
+    # Владелец (04-10): дом пишет ТОЛЬКО своим ключом и только в свой дом; судьи и инструмент — чтение.
+    pr "владелец: origin дома = $REPO_GITHUB" "[ \"\$(git -C '$DOM' remote get-url origin)\" = '$GITHUB_DOMA' ]"
+    pr "владелец: ключ $(basename "$KLYUCH_REPO") открывает $REPO_GITHUB" "GIT_SSH_COMMAND='ssh -i $KLYUCH_REPO -o IdentitiesOnly=yes -o BatchMode=yes' git ls-remote git@github.com:$REPO_GITHUB.git HEAD"
+    for K in "$SSH_KATALOG"/sudi "$SSH_KATALOG"/poisk-raboty; do
+      pr "владелец: $(basename "$K") НЕ открывает $REPO_GITHUB" "! GIT_SSH_COMMAND='ssh -i $K -o IdentitiesOnly=yes -o BatchMode=yes' git ls-remote git@github.com:$REPO_GITHUB.git HEAD"
+    done
+    pr "владелец: ключ дома НЕ открывает $SUDI_REPO" "! GIT_SSH_COMMAND='ssh -i $KLYUCH_REPO -o IdentitiesOnly=yes -o BatchMode=yes' git ls-remote git@github.com:$SUDI_REPO.git HEAD"
+    pr "владелец: sudi открывает $SUDI_REPO" "GIT_SSH_COMMAND='ssh -i $SSH_KATALOG/sudi -o IdentitiesOnly=yes -o BatchMode=yes' git ls-remote git@github.com:$SUDI_REPO.git HEAD"
+    return $PLOHO
+  fi
   pr "проба: у дома нет origin"     "! git -C '$DOM' remote get-url origin"
   pr "проба: псевдонима $SSH_PSEVDONIM нет" "! grep -qx 'Host $SSH_PSEVDONIM' '$SSH_KATALOG/config'"
   for K in "$SSH_KATALOG"/sudi "$SSH_KATALOG"/poisk-raboty; do
@@ -1369,6 +1408,23 @@ if [ ! -d .git ] && [ "$REZHIM" = proba ]; then
   fi
   git reset -q --hard "$ISTS"
   fakt "прошлая жизнь" "снимок $ISTV @ ${ISTS:0:7}: $(git rev-list --count HEAD) коммитов → ветка $NAZN, без origin"
+fi
+# Ссылка владельца (04-10): прошлая жизнь — ветка-ИСТОЧНИК из описи (испытание ставится другим поколением,
+# v90, и от v01 ветвится, не трогая её), до вершины, закреплённой при выпуске. Ветка ушла вперёд (ночь
+# Contabo пушит) — можно; вершины нет в её истории — отказ: история переписана, ставить не то.
+if [ ! -d .git ] && [ -n "${SSYLKA_VLADELTSA:-}" ]; then
+  read -r ISTV ISTS NAZN < <(python3 -c 'import json,sys;o=json.load(open(sys.argv[1]));print(o["istochnik"]["vetka"],o["istochnik"]["sha"],o["naznachenie"])' "$ZAKAZ_PAPKA/opis.json")
+  git init -q -b "$NAZN"
+  git config user.name  "${GIT_IMYA:-Ivan}"
+  git config user.email "${GIT_POCHTA:-ivan@$(hostname -s)}"
+  git remote add origin "$GITHUB_DOMA"
+  if ! git fetch -q origin "refs/heads/$ISTV:refs/remotes/origin/$ISTV" \
+     || ! git merge-base --is-ancestor "$ISTS" "refs/remotes/origin/$ISTV" 2>/dev/null; then
+    rm -rf "$DOM/.git"
+    upal "ветка $ISTV не взялась с $REPO_GITHUB (или в ней нет вершины ${ISTS:0:7}) — дом родился бы ПУСТЫМ"
+  fi
+  git reset -q --hard "$ISTS"
+  fakt "прошлая жизнь" "$ISTV @ ${ISTS:0:7} с $REPO_GITHUB: $(git rev-list --count HEAD) коммитов → ветка $NAZN"
 fi
 if [ ! -d .git ] && [ -n "$GITHUB_DOMA" ] && [ "${IVANOS_CHISTO:-0}" != "1" ]; then
   git init -q -b "$VERSIYA-$(date +%d%m-%H%M)"
@@ -2299,7 +2355,9 @@ N8N
 # Настройка, которая не пережила перезагрузку (ufw, sshd, fail2ban, службы), — не настройка.
 f_itog_do() {
   bash "$PAKET_PAPKA/itog-proba.sh" do || upal "итоговые пробы ДО перезагрузки не все зелёные — выше какие. Не перезагружаю"
-  [ "$REZHIM" != proba ] || proba_ne_pishet || upal "проба пишет в GitHub или хранит запретное — выше что. Не перезагружаю"
+  if [ "$REZHIM" = proba ] || [ -n "${SSYLKA_VLADELTSA:-}" ]; then
+    proba_ne_pishet || upal "ключи машины не те, что обещаны ($REZHIM) — выше что. Не перезагружаю"
+  fi
 }
 f_perezagruzka() {
   if [ "${IVANOS_BEZ_PEREZAGRUZKI:-0}" = 1 ]; then
@@ -2401,7 +2459,7 @@ main() {
 
   shag "предпроверка — только чтение"
   predproverka
-  [ "$REZHIM" != proba ] || sverit_opis
+  if [ "$REZHIM" = proba ] || [ -n "${SSYLKA_VLADELTSA:-}" ]; then sverit_opis; fi
   # Отсюда машина меняется. Журнал и отметки заводятся только теперь — предпроверка не пишет ничего.
   mkdir -p "$SOSTOYANIE"
   # Вид и пакет — для итога (itog-proba.sh зовётся и после перезагрузки, без нашего окружения). 04-10, проба 2:
@@ -2437,7 +2495,7 @@ main() {
     etap perezagruzka f_perezagruzka
     return 0
   fi
-  if [ "$REZHIM" = proba ]; then etap okno f_okno_proba; else etap okno f_okno; fi
+  if [ "$REZHIM" = proba ] || [ -n "${SSYLKA_VLADELTSA:-}" ]; then etap okno f_okno_proba; else etap okno f_okno; fi
   etap paket      f_paket
   paket_nastrojki
   # n8n — фоном сразу, как известны ответ владельца и закрепления: замер 28-09 — npm install
@@ -2446,7 +2504,7 @@ main() {
   [ -f "$SOSTOYANIE/dom-$VERSIYA.ok" ] || proverit_vorota
   fon_zhdat mashina
   fon_zhdat claude
-  if [ "$REZHIM" = proba ]; then fakt "бэкап" "не ставлю: проба, пароля нет (04-10)"; else etap bekap f_bekap; fi
+  if [ "$REZHIM" = proba ] || [ -n "${SSYLKA_VLADELTSA:-}" ]; then fakt "бэкап" "не ставлю: ссылка, пароля нет (04-10)"; else etap bekap f_bekap; fi
   etap sudi       f_sudi_privezti
   etap plaginy    f_plaginy
   etap "dom-$VERSIYA"     f_dom
