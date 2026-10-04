@@ -139,6 +139,17 @@ if [ -n "$ZAKAZ_PAPKA" ] && [ -f "$ZAKAZ_PAPKA/zakaz.env" ]; then
     IMYA="Ассистент $(date +%d-%m)"
     ITOG_SKRIPT=/usr/local/sbin/ivanos-itog-klient.sh
   fi
+  # Проба дома владельца — слово 04-10 через проверяющего: «снимок дома (bundle ветки v01) и судьи — БЕЗ
+  # ключа записи, БЕЗ токена, БЕЗ пароля бэкапа; машина пробы в GitHub не пишет». Дом владельца целиком
+  # (ночь, смена, судьи), но: пакет и дом — из заказа (opis.json сверяется до первого изменения машины,
+  # sverit_opis), GITHUB_DOMA пуст (ни ключа IvanOS, ни origin), в окне нет токена и пароля, бэкапа нет.
+  if [ "${ZAKAZ_VID:-}" = proba ]; then
+    REZHIM=proba
+    GITHUB_DOMA=""
+    PAKET_PAPKA="$ZAKAZ_PAPKA/paket"
+    PAKET_KOMMIT=""          # загрузчик передаёт свой — пакету пробы он не указ, указ — опись
+    ITOG_SKRIPT="$PAKET_PAPKA/itog-proba.sh"
+  fi
 fi
 # Один Chromium на машину: для глаз Ивана (MCP Playwright) и для poisk-raboty. Версия — та же,
 # что закреплена в poisk-raboty (package.json), иначе инструмент докачает свою ревизию рядом.
@@ -469,6 +480,77 @@ vorota_svezhesti
 #   у GitHub нет IPv6, а пакет и ключи ходят туда; вход ТЕКУЩЕЙ сессии по ключу — защита
 #   выключит пароль, и владелец, вошедший паролем, окажется за дверью. «Ключ где-то лежит»
 #   не считается: смотрим журнал sshd, как вошла именно эта сессия (ip:порт из SSH_CONNECTION).
+# ── ‹opis› Пакет пробы: опись format 1 сверяется с привезённым ДО первого изменения машины ──────────
+# Отказ — словами, машина не тронута. Сверяется: format, вид, заказ, поколение = аргументу, sha bundle и
+# его вершина = источнику, sha пакета, установщик пакета = этому (иначе пакет и установщик разных
+# выпусков), судьи = закреплённым здесь, dom_repo пуст. Только python3 — git на чистой машине ещё нет.
+sverit_opis() {
+  local Z=$ZAKAZ_PAPKA
+  [ -f "$Z/opis.json" ] || { echo "🔴 ОТКАЗ: в пакете пробы нет opis.json"; exit 1; }
+  python3 - "$Z" "$VERSIYA" "${ZAKAZ_ID:-}" "$SKRIPT" "$SUDI_REPO" "$SUDI_KOMMIT" <<'SVERKA' || exit 1
+import json, sys, hashlib, os
+z, versiya, zakaz, skript, sudi_repo, sudi_k = sys.argv[1:]
+h = lambda f: hashlib.sha256(open(f, "rb").read()).hexdigest()
+def otkaz(t): print("🔴 ОТКАЗ (опись пробы): " + t + ". Машина не тронута."); sys.exit(1)
+try: o = json.load(open(os.path.join(z, "opis.json")))
+except Exception as e: otkaz(f"opis.json не читается ({e})")
+if o.get("format") != 1: otkaz(f"format {o.get('format')!r}, этот установщик знает только 1")
+if o.get("vid") != "proba": otkaz(f"вид {o.get('vid')!r}, ждал proba")
+if o.get("zakaz_id") != zakaz: otkaz(f"опись заказа {o.get('zakaz_id')!r}, а ссылка {zakaz!r}")
+if o.get("pokolenie") != versiya: otkaz(f"опись для поколения {o.get('pokolenie')!r}, ставлю {versiya!r}")
+if o.get("dom_repo") is not None: otkaz("у пробы есть репозиторий дома — проба в GitHub не пишет")
+for f, k in (("dom.bundle", o.get("dom_bundle_sha256")), ("paket.tgz", (o.get("paket") or {}).get("sha256"))):
+    p = os.path.join(z, f)
+    if not os.path.isfile(p): otkaz(f"нет {f}")
+    if h(p) != k: otkaz(f"{f} не тот, что в описи (sha256)")
+ist = o.get("istochnik") or {}
+with open(os.path.join(z, "dom.bundle"), "rb") as b:
+    golova = [l.decode() for l in iter(b.readline, b"\n")]
+if f"{ist.get('sha')} refs/heads/{ist.get('vetka')}\n" not in golova:
+    otkaz(f"вершина снимка не {ist.get('vetka')} @ {str(ist.get('sha'))[:7]}")
+if (o.get("paket") or {}).get("stend_sha256") != h(skript):
+    otkaz("установщик пакета и этот установщик разных выпусков (stend_sha256)")
+s = o.get("sudi") or {}
+if s.get("repo") != sudi_repo or s.get("kommit") != sudi_k:
+    otkaz(f"судьи в описи {s.get('repo')}@{str(s.get('kommit'))[:7]}, закреплены {sudi_repo}@{sudi_k[:7]}")
+if not str(o.get("naznachenie", "")).startswith("proba-"): otkaz("ветка назначения не proba-…")
+print(f"   ✅ опись пробы сошлась: {ist.get('vetka')} @ {ist.get('sha','')[:7]}, судьи @ {sudi_k[:7]}")
+SVERKA
+  if [ ! -d "$PAKET_PAPKA/dom" ]; then
+    install -d -m 700 "$PAKET_PAPKA"
+    tar -C "$PAKET_PAPKA" -xzf "$Z/paket.tgz" || { echo "🔴 ОТКАЗ: paket.tgz не распаковался"; exit 1; }
+  fi
+}
+f_okno_proba() {
+  IVANOS_TOLKO_POKAZAT=1
+  IVANOS_DOP_KLYUCHI="poisk-raboty|$INSTRUMENT_POISK|net sudi|$SUDI_REPO|net"
+  f_github_dostup
+  echo
+  fakt "токен и пароль бэкапа" "не спрашиваются: проба в GitHub не пишет, бэкапа нет (04-10)"
+  okno_n8n
+  echo
+  echo "   Жду ключи на GitHub…"
+  github_dostup_zhdat
+  fon_zhdat claude
+  okno_vhod
+}
+# Проба «не пишет» — фактом: ни токена, ни пароля, ни origin, ни псевдонима дома; ни один ключ не
+# открывает дом на GitHub; ключ судей судей открывает. Ключ чтения ли он — видно только на странице
+# Deploy keys (галка), её сверяет проверяющий.
+proba_ne_pishet() {
+  local PLOHO=0 K
+  pr() { if eval "$2" >/dev/null 2>&1; then fakt "✅ $1" ""; else fakt "🔴 $1" ""; PLOHO=1; fi; }
+  pr "проба: токена нет"            "! grep -q '^GH_TOKEN=' '$TOKEN_FAJL'"
+  pr "проба: пароля бэкапа нет"     "[ ! -e '$PAROL_FAJL' ]"
+  pr "проба: у дома нет origin"     "! git -C '$DOM' remote get-url origin"
+  pr "проба: псевдонима $SSH_PSEVDONIM нет" "! grep -qx 'Host $SSH_PSEVDONIM' '$SSH_KATALOG/config'"
+  for K in "$SSH_KATALOG"/sudi "$SSH_KATALOG"/poisk-raboty; do
+    pr "проба: $(basename "$K") НЕ открывает $REPO_GITHUB" "! GIT_SSH_COMMAND='ssh -i $K -o IdentitiesOnly=yes -o BatchMode=yes' git ls-remote git@github.com:$REPO_GITHUB.git HEAD"
+  done
+  pr "проба: sudi открывает $SUDI_REPO" "GIT_SSH_COMMAND='ssh -i $SSH_KATALOG/sudi -o IdentitiesOnly=yes -o BatchMode=yes' git ls-remote git@github.com:$SUDI_REPO.git HEAD"
+  return $PLOHO
+}
+
 predproverka() {
   local K=${IVANOS_KOREN:-} BEDY="" S MEM SVOB KOD SC IP PORT ZH
   S=$(. "$K/etc/os-release" 2>/dev/null; echo "${ID:-?} ${VERSION_ID:-?}")
@@ -592,7 +674,23 @@ grep -qE '^(ssh-(ed25519|rsa)|ecdsa-sha2-|sk-)' "$KLYUCHI_VLADELTSA" 2>/dev/null
   || upal "в $KLYUCHI_VLADELTSA нет ни одного ключа — выключить пароль значит запереть владельца. Сначала ключ (панель Contabo → Reinstall с ssh-ключом или ssh-copy-id), потом установщик заново"
 grep -qE "^Include +$KOREN/etc/ssh/sshd_config\.d/\*\.conf" "$SSHD_KONF" \
   || upal "$SSHD_KONF не читает sshd_config.d — своё правило туда не положить"
+# 🔴 04-10, проба 1 (12:53): на этом разделе оборвался ssh владельца — пришлось заходить заново и
+# tmux attach. Причину с машины пробы ещё не видели; единственный перезапуск в разделе — ssh.socket, и он
+# стоял безусловно, хотя нужен только при смене порта. Теперь он — только при смене порта, а связь
+# владельца (ip:порт из SSH_CONNECTION) замеряется после каждого подшага: оборвётся снова — журнал
+# назовёт, после чего.
+svyaz() {   # <после чего>
+  local SC=${IVANOS_SSH_CONNECTION:-${SSH_CONNECTION:-}} IP PORT
+  [ -n "$SC" ] || return 0
+  read -r IP PORT _ <<< "$SC"
+  if ss -tnH state established 2>/dev/null | grep -qF -e "$IP:$PORT" -e "[$IP]:$PORT"; then
+    fakt "связь владельца" "жива после: $1"
+  else
+    fakt "связь владельца" "🔴 ОБОРВАНА после: $1 ($IP:$PORT)"
+  fi
+}
 apt-get install -y -qq ufw fail2ban python3-systemd >/dev/null
+svyaz "apt ufw fail2ban"
 SSHD_NASH=$KOREN/etc/ssh/sshd_config.d/00-ivanos.conf
 {
   echo "# IvanOS, stend-postavit.sh ‹zashchita-servera›. Первое значение побеждает — потому 00."
@@ -618,9 +716,17 @@ for P in ${IVANOS_OTKRYT:-}; do ufw allow "$P/tcp" >/dev/null; done
 ufw --force enable >/dev/null
 grep -q '^Status: active' <(ufw status) || upal "ufw не включился"
 grep -qE "^$SSH_PORT/tcp +ALLOW" <(ufw status) || upal "ufw включён, а порт ssh $SSH_PORT не открыт — новые входы отрезаны"
+svyaz "ufw enable"
 systemctl daemon-reload
-systemctl restart ssh.socket 2>/dev/null || true   # нет сокетной активации — нечего перезапускать
+# Сокет перезапускается, ТОЛЬКО если он слушает не тот порт (порт сменили): пароль и kbd sshd берёт по
+# reload (SIGHUP), сокет для этого не нужен. Нет сокетной активации — нечего перезапускать.
+if systemctl is-enabled -q ssh.socket 2>/dev/null \
+   && ! grep -qF ":$SSH_PORT (Stream)" <(systemctl show ssh.socket -p Listen --value 2>/dev/null); then
+  systemctl restart ssh.socket
+  fakt "ssh.socket" "перезапущен: порт сменён на $SSH_PORT"
+fi
 systemctl try-reload-or-restart ssh.service
+svyaz "sshd reload"
 grep -qE "[:.]$SSH_PORT +" <(ss -ltn) || upal "ssh не слушает порт $SSH_PORT после перезапуска — НЕ закрывай текущую сессию, смотри: systemctl status ssh.socket ssh.service"
 cat > "$KOREN/etc/fail2ban/jail.d/ivanos.local" <<F2B
 # IvanOS, stend-postavit.sh ‹zashchita-servera›
@@ -635,6 +741,7 @@ F2B
 systemctl enable -q fail2ban
 systemctl restart fail2ban
 sleep 2
+svyaz "fail2ban"
 fail2ban-client status sshd >/dev/null 2>&1 || upal "fail2ban не поднял тюрьму sshd: journalctl -u fail2ban -n 30"
 fakt "ssh" "только ключ, root без пароля, порт $SSH_PORT"
 fakt "ufw" "входящие закрыты, открыто: $SSH_PORT${IVANOS_OTKRYT:+ $IVANOS_OTKRYT}"
@@ -819,7 +926,9 @@ f_github_dostup() {
 mkdir -p "$SSH_KATALOG" && chmod 700 "$SSH_KATALOG"
 KONF_SSH=$SSH_KATALOG/config
 touch "$KONF_SSH" && chmod 600 "$KONF_SSH"
-if ! grep -qx "Host $SSH_PSEVDONIM" "$KONF_SSH" 2>/dev/null; then
+# 🔴 04-10, проба 1 (клиент): псевдоним дома писался безусловно — у клиента в ~/.ssh/config оставался
+# «Host github-ivanos» без ключа. Нет копии дома (клиент, проба) — нет и псевдонима.
+if [ -n "$GITHUB_DOMA" ] && ! grep -qx "Host $SSH_PSEVDONIM" "$KONF_SSH" 2>/dev/null; then
   cat >> "$KONF_SSH" <<SSHKONF
 Host $SSH_PSEVDONIM
   HostName github.com
@@ -1022,8 +1131,11 @@ okno_vhod() {
   # Запасной путь остаётся (замечание проверяющего 28-09): вход в окне не прошёл по иной причине —
   # сказать словами и ждать, не выходить. Вход в tmux и без него проверен в chisty-proba.sh, раздел 3.
   echo
+  # 🔴 04-10, проба 1: подсказка «ssh -t root@IP» у владельца спросила пароль — он входит своим
+  # псевдонимом с ключом (ssh ivanos-proba), а по голому адресу ssh ключа не берёт. Адрес не подсказываем.
   echo "   🔴 Вход отсюда не прошёл. Сделай его в ДРУГОМ окне своего компьютера:"
-  echo "       ssh -t root@$(hostname -I 2>/dev/null | awk '{print $1}') \"$CLAUDE auth login\""
+  echo "       зайди на сервер так же, как зашёл сейчас (например: ssh ivanos-proba), и выполни:"
+  echo "       $CLAUDE auth login"
   echo "   Скрипт ждёт сам и проверяет каждые ${IVANOS_ZHDAT_VHOD_SHAG_S:-10} с — перезапускать не нужно."
   T0=$SECONDS
   until vhod_est; do
@@ -1217,6 +1329,21 @@ cd "$DOM"
 # начинались бы с нуля бесконечно. Это и есть тупик, которого владелец опасался.
 #
 # Начать НАЧИСТО, не продолжая: IVANOS_CHISTO=1 bash stend-postavit.sh vNN
+# Проба (04-10): прошлая жизнь — из снимка в заказе (dom.bundle), не с GitHub. Ветка — назначение из
+# описи (proba-…), только локально: origin нет, ключа записи нет — проба в GitHub не пишет.
+if [ ! -d .git ] && [ "$REZHIM" = proba ]; then
+  read -r ISTV ISTS NAZN < <(python3 -c 'import json,sys;o=json.load(open(sys.argv[1]));print(o["istochnik"]["vetka"],o["istochnik"]["sha"],o["naznachenie"])' "$ZAKAZ_PAPKA/opis.json")
+  git init -q -b "$NAZN"
+  git config user.name  "${GIT_IMYA:-Ivan}"
+  git config user.email "${GIT_POCHTA:-ivan@$(hostname -s)}"
+  if ! git fetch -q "$ZAKAZ_PAPKA/dom.bundle" "refs/heads/$ISTV:refs/snimok/$ISTV" \
+     || [ "$(git rev-parse "refs/snimok/$ISTV")" != "$ISTS" ]; then
+    rm -rf "$DOM/.git"
+    upal "снимок дома $ISTV не взялся из dom.bundle (или вершина не $ISTS) — дом родился бы ПУСТЫМ"
+  fi
+  git reset -q --hard "$ISTS"
+  fakt "прошлая жизнь" "снимок $ISTV @ ${ISTS:0:7}: $(git rev-list --count HEAD) коммитов → ветка $NAZN, без origin"
+fi
 if [ ! -d .git ] && [ -n "$GITHUB_DOMA" ] && [ "${IVANOS_CHISTO:-0}" != "1" ]; then
   git init -q -b "$VERSIYA-$(date +%d%m-%H%M)"
   git config user.name  "${GIT_IMYA:-Ivan}"
@@ -1645,7 +1772,7 @@ fakt "файлов"   "$(ls -A | grep -v '^.git$' | wc -l)"
 # Псевдоним ssh, known_hosts и ключ заводятся раньше, в ‹github-dostup› (27-09): здесь
 # их было поздно — дом к этому месту уже родился пустым. Сюда доходит и дом, поставленный
 # с IVANOS_CHISTO=1 без ключа: тогда копии нет, и это говорится вслух.
-if [ ! -f "$KLYUCH_REPO" ]; then
+if [ "$REZHIM" != proba ] && [ ! -f "$KLYUCH_REPO" ]; then
   echo
   echo "   🔴 НЕТ КЛЮЧА РАЗВЁРТЫВАНИЯ $KLYUCH_REPO — копии у дома не будет."
   echo "   Завести: запустить установщик без IVANOS_CHISTO — он заведёт ключ сам и покажет,"
@@ -1655,7 +1782,9 @@ fi
 
 # 🔴 Пуш НЕ валит установку. Дом без сети — живой дом; дом, который не родился из-за
 # недоступного GitHub, — мёртвый. Поэтому здесь громкая строка, а не upal.
-if [ -n "$GITHUB_DOMA" ]; then
+if [ "$REZHIM" = proba ]; then
+  fakt "копия на GitHub" "нет — проба в GitHub не пишет (слово 04-10); ветка $(git rev-parse --abbrev-ref HEAD) только здесь"
+elif [ -n "$GITHUB_DOMA" ]; then
   # 🔴 Имя ветки спрашивается у самого дома, а не собирается заново: при повторном
   # запуске установщика дом НЕ переинициализируется, и собранное имя разошлось бы
   # с настоящим — копия уехала бы в пустую новую ветку.
@@ -2141,6 +2270,7 @@ N8N
 # Настройка, которая не пережила перезагрузку (ufw, sshd, fail2ban, службы), — не настройка.
 f_itog_do() {
   bash "$PAKET_PAPKA/itog-proba.sh" do || upal "итоговые пробы ДО перезагрузки не все зелёные — выше какие. Не перезагружаю"
+  [ "$REZHIM" != proba ] || proba_ne_pishet || upal "проба пишет в GitHub или хранит запретное — выше что. Не перезагружаю"
 }
 f_perezagruzka() {
   if [ "${IVANOS_BEZ_PEREZAGRUZKI:-0}" = 1 ]; then
@@ -2242,6 +2372,7 @@ main() {
 
   shag "предпроверка — только чтение"
   predproverka
+  [ "$REZHIM" != proba ] || sverit_opis
   # Отсюда машина меняется. Журнал и отметки заводятся только теперь — предпроверка не пишет ничего.
   mkdir -p "$SOSTOYANIE"
   [ -f "$SOSTOYANIE/nachalo" ] || date +%s > "$SOSTOYANIE/nachalo"
@@ -2269,7 +2400,7 @@ main() {
     etap perezagruzka f_perezagruzka
     return 0
   fi
-  etap okno       f_okno
+  if [ "$REZHIM" = proba ]; then etap okno f_okno_proba; else etap okno f_okno; fi
   etap paket      f_paket
   paket_nastrojki
   # n8n — фоном сразу, как известны ответ владельца и закрепления: замер 28-09 — npm install
@@ -2278,7 +2409,7 @@ main() {
   [ -f "$SOSTOYANIE/dom-$VERSIYA.ok" ] || proverit_vorota
   fon_zhdat mashina
   fon_zhdat claude
-  etap bekap      f_bekap
+  if [ "$REZHIM" = proba ]; then fakt "бэкап" "не ставлю: проба, пароля нет (04-10)"; else etap bekap f_bekap; fi
   etap sudi       f_sudi_privezti
   etap plaginy    f_plaginy
   etap "dom-$VERSIYA"     f_dom
