@@ -1120,8 +1120,20 @@ vhod_est() {
        | python3 -c 'import sys,json;print(str(json.load(sys.stdin).get("loggedIn",False)).lower())' 2>/dev/null)" = true ]
 }
 okno_vhod() {
-  local T0
   if vhod_est; then fakt "вход в Claude" "уже есть"; return 0; fi
+  # 🔴 04-10, пробы 1 и 2: вход ИЗ ОКНА УСТАНОВКИ (tmux) — «Login failed: Request failed with status code
+  # 400» 2 из 2 (13:01, 16:59); из отдельного окна `claude auth login` — 2 из 2 прошёл. В пане видна
+  # оборванная строка перед «Paste code» — ссылка или код рвутся при копировании из tmux. Под tmux
+  # в окне установки не пытаемся: сразу ведём во второе окно и ждём.
+  if [ -n "${TMUX:-}" ]; then
+    echo
+    echo "   ▸ Вход в Claude — во ВТОРОМ окне (из этого окна вход ломается при копировании ссылки):"
+    echo "       1) открой второе окно и зайди на сервер так же, как сейчас (например: ssh ivanos-proba);"
+    echo "       2) выполни: $CLAUDE auth login"
+    echo "       3) открой ссылку в браузере, войди, вставь код туда же — во второе окно."
+    echo "   Это окно ждёт само и проверяет каждые ${IVANOS_ZHDAT_VHOD_SHAG_S:-10} с — здесь ничего нажимать не нужно."
+    vhod_zhdat; return 0
+  fi
   echo "   Вход в Claude: ниже появится ссылка — открыть в браузере, войти, код вставить сюда."
   # 🔴 --foreground — находка 3 пробы 29-09: без него timeout уводит claude в свою группу процессов,
   # она не в переднем плане терминала, чтение кода — SIGTTIN, процесс в состоянии T, ссылки нет.
@@ -1137,7 +1149,10 @@ okno_vhod() {
   echo "       зайди на сервер так же, как зашёл сейчас (например: ssh ivanos-proba), и выполни:"
   echo "       $CLAUDE auth login"
   echo "   Скрипт ждёт сам и проверяет каждые ${IVANOS_ZHDAT_VHOD_SHAG_S:-10} с — перезапускать не нужно."
-  T0=$SECONDS
+  vhod_zhdat
+}
+vhod_zhdat() {
+  local T0=$SECONDS
   until vhod_est; do
     if [ "${IVANOS_ZHDAT_VHOD_S:-0}" -gt 0 ] && [ $((SECONDS - T0)) -ge "${IVANOS_ZHDAT_VHOD_S:-0}" ]; then
       upal "СТОП: входа в Claude так и нет за ${IVANOS_ZHDAT_VHOD_S} с"

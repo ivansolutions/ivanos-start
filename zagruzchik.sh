@@ -62,10 +62,10 @@ main() {
   export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
   # ── Закреплено при публикации (тег ivanos-start). Меняется ТОЛЬКО вместе с тегом. ──
-  local ADRES="${IVANOS_START_ADRES:-https://raw.githubusercontent.com/ivansolutions/ivanos-start/v2.2.0}"
-  local SHA_STEND=6e7fcf45cf5ac445ea1b1f1fbabbf8b28fc7079da58f016331e6afffc172b80c
+  local ADRES="${IVANOS_START_ADRES:-https://raw.githubusercontent.com/ivansolutions/ivanos-start/v2.2.1}"
+  local SHA_STEND=c0ec789dab58e70fbeb2d1407d0dc8b8a0a80e20968c6ca3ad971dc4f4fe5769
   local SHA_MASHINA=ba1b8d6e4e36b67f2ff9cfa02affc0a27174268ff2718a2213c197a3fc6f100e
-  local PAKET_KOMMIT="${IVANOS_PAKET_KOMMIT:-1b8ae86a284705eeab7eb973b1e58679fff368ae}"   # ← полный хеш коммита пакета IvanOS; ставится при публикации
+  local PAKET_KOMMIT="${IVANOS_PAKET_KOMMIT:-83fe74ba5aec6d72a7a4de727ccc20c0313f5ecd}"   # ← полный хеш коммита пакета IvanOS; ставится при публикации
   # ────────────────────────────────────────────────────────────────────────────
 
   # Подмены — только для zagruzchik-proba.sh: папка, tmux и терминал. Владелец их не задаёт.
@@ -127,7 +127,16 @@ main() {
       echo "   TERM=«${TERM:-}» tmux не годится — ставлю xterm-256color"
       export TERM=xterm-256color
     fi
-    echo "   Установка идёт в tmux «ivanos-ustanovka». Оборвалась связь — зайти и: tmux attach -t ivanos-ustanovka"
+    # 🔴 04-10, проба 2: «если связь оборвётся» — владелец читал «Оборвалась связь…» как сообщение об обрыве.
+    echo "   Установка идёт в tmux «ivanos-ustanovka». Если связь оборвётся — зайди снова и: tmux attach -t ivanos-ustanovka"
+    # 🔴 04-10, проба 2 (и, похоже, 1): экран владельца застывал сразу после строки выше — клиент tmux
+    # attached,focused, а не рисует ничего; вторая вкладка с attach видит всё. Воспроизведено в
+    # псевдотерминале (tmux-proba.sh): stdin, ЗАНОВО открытый по имени (<"$TTY"), — 0 байт от tmux;
+    # stdin — копия уже открытого терминала (<&1) — экран и вопрос на месте. При `curl | bash` stdin —
+    # труба, а stdout — терминал владельца: его и отдаём. Не терминал — по-старому, по имени.
+    if [ -t 1 ]; then
+      exec "$TMUX_K" new-session -A -s ivanos-ustanovka "$ZAPUSK; echo; echo '   (окно можно закрыть: Ctrl-b d)'; exec bash" <&1
+    fi
     exec "$TMUX_K" new-session -A -s ivanos-ustanovka "$ZAPUSK; echo; echo '   (окно можно закрыть: Ctrl-b d)'; exec bash" <"$TTY"
   else
     echo "   ⚠️  tmux нет — ставлю без него. Оборвётся ssh — та же строка ещё раз продолжит с упавшего шага."
