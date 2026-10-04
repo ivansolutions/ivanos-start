@@ -62,10 +62,10 @@ main() {
   export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
   # ── Закреплено при публикации (тег ivanos-start). Меняется ТОЛЬКО вместе с тегом. ──
-  local ADRES="${IVANOS_START_ADRES:-https://raw.githubusercontent.com/ivansolutions/ivanos-start/v2.2.1}"
-  local SHA_STEND=c0ec789dab58e70fbeb2d1407d0dc8b8a0a80e20968c6ca3ad971dc4f4fe5769
+  local ADRES="${IVANOS_START_ADRES:-https://raw.githubusercontent.com/ivansolutions/ivanos-start/v2.2.2}"
+  local SHA_STEND=f6825ceb8e143008e13c547ab5a8fae8d401c6526e1be6de09a8afd114b5c924
   local SHA_MASHINA=ba1b8d6e4e36b67f2ff9cfa02affc0a27174268ff2718a2213c197a3fc6f100e
-  local PAKET_KOMMIT="${IVANOS_PAKET_KOMMIT:-83fe74ba5aec6d72a7a4de727ccc20c0313f5ecd}"   # ← полный хеш коммита пакета IvanOS; ставится при публикации
+  local PAKET_KOMMIT="${IVANOS_PAKET_KOMMIT:-09f7c7cd61fac6ab2cb7566500929b9de038c3d6}"   # ← полный хеш коммита пакета IvanOS; ставится при публикации
   # ────────────────────────────────────────────────────────────────────────────
 
   # Подмены — только для zagruzchik-proba.sh: папка, tmux и терминал. Владелец их не задаёт.

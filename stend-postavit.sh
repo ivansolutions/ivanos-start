@@ -297,8 +297,19 @@ fon_zhdat() {   # <имя> — дождаться цепочки; упала —
 }
 
 # Вопрос владельцу — прямо в его окно, мимо журнала: ответы (пароль, токен) в журнал не пишутся.
+# 🔴 04-10, проба 3 (снимок пана): после «[да/нет]:» на экран приходили строки, напечатанные ДО вопроса.
+# Обычный вывод идёт трубой журнала (время к строке, tee), вопрос — прямо в терминал, мимо неё, и обгоняет
+# то, что ещё в трубе. Поэтому перед вопросом труба сливается: метка в обычный вывод — ждём её в журнале
+# (tee пишет на экран раньше, чем в файл), потолок 3 с. Проба: n8n-vopros-proba.sh.
+SPROSIT_N=0
 sprosit() {     # <переменная> <вопрос> [skryto]
-  local OTV=""
+  local OTV="" M T0
+  if [ -n "${ZHURNAL_TRUBA:-}" ]; then
+    SPROSIT_N=$((SPROSIT_N+1)); M="   ── вопрос $SPROSIT_N ($$) ──"
+    echo "$M"
+    T0=$SECONDS
+    until grep -qxF -- "$M" <(sed 's/^[0-9:]* //' "$ZHURNAL_TRUBA" 2>/dev/null) || [ $((SECONDS - T0)) -ge 3 ]; do sleep 0.1; done
+  fi
   printf '%s' "   ❓ $2 " > "$TTY_VYVOD"
   if [ "${3:-}" = skryto ]; then IFS= read -r -s OTV < "$TTY_VVOD" || true; printf '\n' > "$TTY_VYVOD"
   else IFS= read -r OTV < "$TTY_VVOD" || true; fi
@@ -1778,7 +1789,10 @@ git add -A
 # шаблоном». Теперь в строке версия, дата и первые 12 знаков хеша установщика: два рождения
 # совпадут, только если поставлены одним и тем же скриптом в одну и ту же минуту.
 # Историю не чиню — семь старых остаются: затирание прошлого лечится враньём, а не правкой.
-git diff --cached --quiet || git commit -q -m "дом($VERSIYA) рождён $(date -u +%Y-%m-%dT%H:%MZ), установщик ${HESH:0:12}: пять страниц и машинерия по описи"
+# 04-10, проба 2: на снимке дома коммит рождения звался «пять страниц и машинерия по описи», а менял два
+# файла (.pokolenie и права push-ne-main.sh). Теперь подпись — из того, что в коммите на самом деле.
+IZM=$(git diff --cached --name-only); N_IZM=$(grep -c . <<< "$IZM" || true)
+git diff --cached --quiet || git commit -q -m "дом($VERSIYA) рождён $(date -u +%Y-%m-%dT%H:%MZ), установщик ${HESH:0:12}: $N_IZM файл(ов) — $(head -3 <<< "$IZM" | tr '\n' ' ')$([ "$N_IZM" -gt 3 ] && echo "и ещё $((N_IZM-3))")"
 fakt "коммитов" "$(git rev-list --all --count)"
 fakt "файлов"   "$(ls -A | grep -v '^.git$' | wc -l)"
 [ "$(git rev-list --all --count)" -ge 1 ] || upal "дом пуст, коммита нет"
@@ -2390,8 +2404,16 @@ main() {
   [ "$REZHIM" != proba ] || sverit_opis
   # Отсюда машина меняется. Журнал и отметки заводятся только теперь — предпроверка не пишет ничего.
   mkdir -p "$SOSTOYANIE"
+  # Вид и пакет — для итога (itog-proba.sh зовётся и после перезагрузки, без нашего окружения). 04-10, проба 2:
+  # у пробы пакет без .git — итог писал «пакет: ?», и «осталось руке владельца: токен» там, где его нет нарочно.
+  echo "$REZHIM" > "$SOSTOYANIE/rezhim"
+  if [ "$REZHIM" = proba ]; then
+    python3 -c 'import json,sys;o=json.load(open(sys.argv[1]));print(o["paket"]["kommit"][:12], "· ссылка", o["zakaz_id"])' \
+      "$ZAKAZ_PAPKA/opis.json" > "$SOSTOYANIE/paket" 2>/dev/null || true
+  fi
   [ -f "$SOSTOYANIE/nachalo" ] || date +%s > "$SOSTOYANIE/nachalo"
   exec > >(vremya_na_stroku | tee -a "$SOSTOYANIE/zhurnal.log") 2>&1
+  ZHURNAL_TRUBA="$SOSTOYANIE/zhurnal.log"   # sprosit сливает эту трубу перед вопросом (проба 3, 04-10)
 
   etap swap       f_swap
   etap ozhidanie  f_ozhidanie
